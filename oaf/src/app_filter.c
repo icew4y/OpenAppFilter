@@ -24,11 +24,16 @@
 #include "af_client.h"
 #include "af_client_fs.h"
 
+
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("destan19@126.com");
 MODULE_DESCRIPTION("app filter module");
 MODULE_VERSION("3.0.1");
 struct list_head af_feature_head = LIST_HEAD_INIT(af_feature_head);
+
+
+struct list_head louis_vivo_head = LIST_HEAD_INIT(louis_vivo_head);
 
 DEFINE_RWLOCK(af_feature_lock);
 
@@ -484,6 +489,8 @@ void parse_http_proto(flow_info_t *flow)
 				flow->http.method = HTTP_METHOD_POST;
 				flow->http.url_pos = data + start + 5;
 				flow->http.url_len = i - start - 5;
+
+				
 				//dump_str("get request", flow->http.url_pos, flow->http.url_len);
 			}
 			else if(0 == memcmp(&data[start], "GET ", 4)) {
@@ -506,6 +513,63 @@ void parse_http_proto(flow_info_t *flow)
 			// 0x0d 0x0a
 			start = i + 2; 
 		}
+	}
+}
+
+static void louis_dump_http_url(http_proto_t *http, char *out_url){
+
+	#define LOUIS_MAX_DUMP_STR_LEN 1024
+
+	if (!http) {
+		AF_ERROR("http ptr is NULL\n");
+		return ;
+	}
+	if (!http->match)
+		return;	
+	if (http->method == HTTP_METHOD_GET){
+		strcat(out_url, "[http]GET ");
+		
+	}
+	else if (http->method == HTTP_METHOD_POST) {
+		strcat(out_url, "[http]POST ");
+	}
+
+	if (http->host_len > 0 && http->host_pos){
+		char buf[LOUIS_MAX_DUMP_STR_LEN] = {0};
+		strncpy(buf, http->host_pos, http->host_len);
+		strcat(out_url, buf);
+	}
+
+	if (http->url_len > 0 && http->url_pos){
+		char buf[LOUIS_MAX_DUMP_STR_LEN] = {0};
+		strncpy(buf, http->url_pos, http->url_len);
+		strcat(out_url, buf);
+	}
+	if (http->data_len > 0 && http->data_len < 900){
+		char buf2[LOUIS_MAX_DUMP_STR_LEN] = {0};
+		strncpy(buf2, http->data_pos, http->data_len);
+		strcat(out_url, "\n");
+		strcat(out_url, buf2);
+	}
+}
+
+
+static void louis_dump_https_url(https_proto_t *https, char *out_url) {
+	#define LOUIS_MAX_DUMP_STR_LEN 1024
+
+	if (!https) {
+		AF_ERROR("https ptr is NULL\n");
+		return ;
+	}
+	if (!https->match)
+		return;	
+	
+
+	if (https->url_len > 0 && https->url_pos){
+		char buf[LOUIS_MAX_DUMP_STR_LEN] = {0};
+		strncpy(buf, https->url_pos, https->url_len);
+		strcat(out_url, "[https]");
+		strcat(out_url, buf);
 	}
 }
 
@@ -676,6 +740,188 @@ int af_match_one(flow_info_t *flow, af_feature_node_t *node)
 		return AF_TRUE;
 	}
 	return ret;
+}
+
+int louis_hex2string(unsigned char *in, int inlen, char *out, int *outlen)
+{
+    int i = 0;
+    char *pos = out;
+
+    if(outlen == NULL || *outlen < 2*inlen + 1)
+        return -1;
+
+    for(i = 0; i < inlen; i += 1)
+        pos += sprintf(pos, "%02hhx", in[i]);
+
+    *outlen = pos - out + 1;
+    return 0;
+}
+
+int louis_string2hex(const char *in, unsigned char *out, int *outlen)
+{
+    int i = 0;
+    int j = 0;
+    int inlen = strlen(in);
+    unsigned char hex[2] = {0};
+
+    if(outlen == NULL || *outlen < inlen/2)
+        return -1;
+
+    for(*outlen = 0, i = 0; i < inlen; *outlen += 1, i += 2)
+    {
+        for(j = 0; j < 2; j += 1)
+        {
+            if(in[i+j] >= '0' && in[i+j] <= '9')        hex[j] = in[i+j] - '0';
+            else if(in[i+j] >= 'a' && in[i+j] <= 'f')   hex[j] = in[i+j] - 'a' + 10;
+            else if(in[i+j] >= 'A' && in[i+j] <= 'F')   hex[j] = in[i+j] - 'A' + 10;
+            else return -1;
+        }
+        out[*outlen] = hex[0] << 4 | hex[1];
+    }
+
+    return 0;
+}
+void louis_remove_chars(char *str, char garbage) {
+
+    char *src, *dst;
+    for (src = dst = str; *src != '\0'; src++) {
+        *dst = *src;
+        if (*dst != garbage) dst++;
+    }
+    *dst = '\0';
+}
+//xx:xx:xx:xx:xx:xx
+struct vivo_feature *louis_new_vivo_feature(char *mac_str){
+	unsigned char machex[MAC_ADDR_LEN] = {0};
+	int outbuff_len = MAC_ADDR_LEN;
+	struct vivo_feature *vt = NULL;
+	char *newmac_str = kmalloc(strlen(mac_str) + 1, GFP_ATOMIC);
+	memset(newmac_str, 0, strlen(mac_str) + 1);
+	memcpy(newmac_str, mac_str, strlen(mac_str));
+	louis_remove_chars(newmac_str, ':');
+	louis_string2hex(newmac_str, machex, &outbuff_len);
+	vt = kmalloc(sizeof(struct vivo_feature), GFP_ATOMIC);
+	memcpy(vt->mac, machex, MAC_ADDR_LEN);
+	vt->domain_size = 0;
+	if (newmac_str)
+		kfree(newmac_str);
+	return vt;
+}
+
+void louis_add_domain_to_feature(struct vivo_feature *vt, char *domain){
+	char *domain1 = (char *)kmalloc(strlen(domain) + 1, GFP_ATOMIC);
+	strcpy(domain1, domain);
+	vt->domains[vt->domain_size] = domain1;
+	vt->domain_size += 1;
+}
+
+void louis_init_vivo_feature(void){
+	struct vivo_feature *vt_oppo = louis_new_vivo_feature("e4:33:ae:e7:ac:73");
+	struct vivo_feature *vt_pixel = louis_new_vivo_feature("e2:44:5b:54:37:81");
+
+	louis_add_domain_to_feature(vt_oppo, "www.baidu.com");
+	list_add(&vt_oppo->hlist, &louis_vivo_head);
+
+	louis_add_domain_to_feature(vt_pixel, "www.baidu.com");
+	list_add(&vt_pixel->hlist, &louis_vivo_head);
+}
+
+int louis_af_match_one(flow_info_t *flow, af_feature_node_t *node)
+{
+	int ret = AF_FALSE;
+	char reg_url_buf[MAX_URL_MATCH_LEN] = {0};
+
+	if (!flow || !node){
+		AF_ERROR("node or flow is NULL\n");
+		return AF_FALSE;
+	}
+	
+	if (flow->l4_len == 0)
+		return AF_FALSE;
+
+	if (node->sport != 0 && flow->sport != node->sport ){
+		return AF_FALSE;
+	}
+
+	if (node->dport != 0 && flow->dport != node->dport)	{
+		return AF_FALSE;
+	}
+
+	if (strlen(node->request_url) > 0 ||
+		strlen(node->host_url) > 0){
+		ret = af_match_by_url(flow, node);
+	}
+	else if (node->pos_num > 0){
+		ret = af_match_by_pos(flow, node);
+	}
+	else{
+		AF_DEBUG("node is empty, match sport:%d,dport:%d, appid = %d\n",
+			node->sport, node->dport, node->app_id);
+		return AF_TRUE;
+	}
+	return ret;
+}
+
+
+int louis_filter(flow_info_t *flow){
+	af_client_info_t *client = NULL;
+	af_feature_node_t node;
+	struct vivo_feature *node_vt, *n;
+	size_t i = 0;
+	char reg_url_buf[LOUIS_MAX_DUMP_STR_LEN] = {0};
+	
+	client = find_af_client_by_ip(flow->src);
+	if (!client){
+		goto EXIT;
+	}
+	if (is_user_match_enable() && !find_af_mac(client->mac)){
+		AF_DEBUG("not match mac:"MAC_FMT"\n", MAC_ARRAY(client->mac));
+		goto EXIT;
+	}
+
+	louis_dump_http_url(&flow->http, reg_url_buf);
+	if (strlen(reg_url_buf) <= 0){
+		louis_dump_https_url(&flow->https, reg_url_buf);
+	}
+
+	if (strlen(reg_url_buf) > 0){
+		if(!list_empty(&louis_vivo_head)) { 
+		list_for_each_entry_safe(node_vt, n, &louis_vivo_head, hlist) {
+			if (0 == memcmp(node_vt->mac, client->mac, MAC_ADDR_LEN)){
+				
+				for (i = 0; i < node_vt->domain_size; i++)
+				{
+					if (strstr(reg_url_buf, node_vt->domains[i])){
+						printk("mac:"MAC_FMT", block url:%s\n", MAC_ARRAY(node_vt->mac), node_vt->domains[i]);
+						flow->drop = AF_TRUE;
+						return AF_TRUE;
+					}
+				}
+				
+			}
+		}
+	}
+	}
+
+
+	// if (strlen(reg_url_buf) > 0){
+	// 	if (strstr(reg_url_buf, "www.baidu.com")){
+	// 		printk("block www.baidu.com! \n");
+	// 		flow->drop = AF_TRUE;
+	// 		return AF_TRUE;
+	// 	}
+	// }
+
+	// strcpy(node.app_name, "Test");
+	// strcpy(node.host_url, "www.baidu.com");
+	// printk("host:%s	 https_url = %s\n", flow->);
+	// if (louis_af_match_one(flow, &node)){
+	// 	flow->drop = AF_TRUE;
+	// 	return AF_TRUE;
+	// }
+EXIT:
+	flow->drop = AF_FALSE;
+	return AF_FALSE;
 }
 
 int app_filter_match(flow_info_t *flow)
@@ -854,6 +1100,12 @@ static u_int32_t app_filter_hook(unsigned int hook,
 	}
 
 #endif
+
+	///////////////////////////////
+	struct ethhdr *eth = (struct ethhdr *)skb_mac_header(skb);
+	struct iphdr *ip_header = (struct iphdr *)skb_network_header(skb);
+	//printk("app_filter_hook src mac %pM, dst mac %pM, IP addr:=%pI4\n", eth->h_source, eth->h_dest, &ip_header->saddr);
+	///////////////////////////////
 	memset((char *)&flow, 0x0, sizeof(flow_info_t));
 	if(parse_flow_base(skb, &flow) < 0){
 		return NF_ACCEPT;
@@ -862,10 +1114,14 @@ static u_int32_t app_filter_hook(unsigned int hook,
 //	int appid = GET_APPID(ct->mark);
 	parse_http_proto(&flow);
 	parse_https_proto(&flow);
-	if (TEST_MODE())
-		dump_flow_info(&flow);
-	app_filter_match(&flow);
+	// if (TEST_MODE())
+	// 	dump_flow_info(&flow);
 
+	//dump_flow_info(&flow);
+	//app_filter_match(&flow);
+
+
+	louis_filter(&flow);
 	if (flow.app_id != 0){
 		//SET_APPID(ct->mark, flow.app_id);
 		if (flow.app_id > 1000 && flow.app_id <= 8999){
@@ -1060,6 +1316,8 @@ int netlink_oaf_init(void)
 }
 
 
+
+
 static int __init app_filter_init(void)
 {
 	printk("appfilter version:"AF_VERSION"\n");
@@ -1068,6 +1326,7 @@ static int __init app_filter_init(void)
 		return -1;
 	}
 
+	louis_init_vivo_feature();
 	netlink_oaf_init();
 	af_log_init();
 	af_register_dev();

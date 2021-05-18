@@ -50,4 +50,6 @@ msgstr "选择用户"
 msgid "Enable App Filter"
 msgstr "开启应用过滤"
 
+msgid "vivo"
+msgstr "vivo域名"
 

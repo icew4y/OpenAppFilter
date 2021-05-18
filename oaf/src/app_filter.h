@@ -92,7 +92,7 @@ typedef struct https_proto{
 }https_proto_t;
 
 typedef struct flow_info{
-	struct nf_conn *ct; // Á¬½Ó¸ú×ÙÖ¸Õë
+	struct nf_conn *ct; // ï¿½ï¿½ï¿½Ó¸ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½
 	u_int32_t src; 
 	u_int32_t dst;
 	int l4_protocol;
@@ -134,6 +134,17 @@ typedef struct af_mac_info {
     struct list_head   hlist;
     unsigned char      mac[MAC_ADDR_LEN];
 }af_mac_info_t;
+
+
+//vivo
+struct vivo_feature
+{
+	struct list_head   hlist;
+	unsigned char mac[MAC_ADDR_LEN];
+	u_int32_t domain_size;
+	char *domains[60];
+};
+
 
 int af_register_dev(void);
 void af_unregister_dev(void);

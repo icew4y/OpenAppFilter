@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "cvector.h": "c",
+        "stdlib.h": "c",
+        "app_filter.h": "c",
+        "cstdio": "c"
+    }
+}
