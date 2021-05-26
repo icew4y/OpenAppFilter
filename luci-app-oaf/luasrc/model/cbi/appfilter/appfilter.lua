@@ -45,6 +45,13 @@ s.anonymous = true
 um = s:option(DummyValue, "rule_data")
 um.template="cbi/oaf_dvalue"
 
+s_custom = m:section(TypedSection, "customsetting", translate("自定义设置"))
+s_custom.anonymous = true
+jsonBlockUrls = s_custom:option(TextValue, "_data", "输入json格式:")
+jsonBlockUrls.wrap    = "off"
+jsonBlockUrls.rows    = 15
+jsonBlockUrls.rmempty = false
+
 s=m:section(TypedSection,"time",translate("时间控制")) s.anonymous = true
 hv = s:option(Value, "start_time", translate("开始时间")) hv.default="00:00"
 hv.optional=false

@@ -137,7 +137,7 @@ typedef struct af_mac_info {
 
 
 //vivo
-struct vivo_feature
+struct domain_feature
 {
 	struct list_head   hlist;
 	unsigned char mac[MAC_ADDR_LEN];
@@ -155,6 +155,7 @@ void af_mac_list_init(void);
 void af_mac_list_clear(void);
 af_mac_info_t * find_af_mac(unsigned char *mac);
 int is_user_match_enable(void);
+int louis_is_match_rule(char *reg_url_buf, char *mac);
 extern int g_oaf_enable;
 
 #endif

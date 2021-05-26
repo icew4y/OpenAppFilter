@@ -83,6 +83,25 @@ load_mac_list()
 	echo "json str=$json_str"
     json_cleanup
 }
+
+# myself cumstom settings
+load_custom_settings()
+{
+	config_load appfilter
+	config_get _data "customsetting" _data
+	echo "_data = $_data"
+
+	json_init
+	json_add_int "op" 5
+	json_add_object "data"
+	json_add_string "customsettings" $_data
+	json_str=`json_dump`
+	config_apply "$json_str"
+	echo "json str=$json_str"
+	json_cleanup
+}
+
 clean_rule
 load_rule
 load_mac_list
+load_custom_settings

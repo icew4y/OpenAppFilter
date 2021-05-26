@@ -27,6 +27,15 @@ DEFINE_RWLOCK(af_rule_lock);
 #define af_rule_write_lock() 		write_lock_bh(&af_rule_lock);
 #define af_rule_write_unlock()		write_unlock_bh(&af_rule_lock);
 
+DEFINE_RWLOCK(louis_af_custom_lock);
+
+#define louis_af_custom_read_lock() 		read_lock_bh(&louis_af_custom_lock);
+#define louis_af_custom_read_unlock() 		read_unlock_bh(&louis_af_custom_lock);
+#define louis_af_custom_write_lock() 		write_lock_bh(&louis_af_custom_lock);
+#define louis_af_custom_write_unlock()		write_unlock_bh(&louis_af_custom_lock);
+
+struct list_head louis_domains_head = LIST_HEAD_INIT(louis_domains_head);
+
 
 static struct mutex af_cdev_mutex;
 struct af_config_dev {
@@ -46,6 +55,7 @@ enum AF_CONFIG_CMD{
 	AF_CMD_DEL_APPID,
 	AF_CMD_CLEAN_APPID,
 	AF_CMD_SET_MAC_LIST,
+	AF_CMD_SET_CUSTOM_SETTINGS,
 };
 
 char g_app_id_array[AF_MAX_APP_TYPE_NUM][AF_MAX_APP_NUM] = {0};
@@ -267,6 +277,261 @@ int af_get_app_status(int appid)
 	af_rule_read_unlock();
 	return status;
 }
+
+
+
+////////////////////////////////////////////////////////
+
+
+
+int louis_hex2string(unsigned char *in, int inlen, char *out, int *outlen)
+{
+    int i = 0;
+    char *pos = out;
+
+    if(outlen == NULL || *outlen < 2*inlen + 1)
+        return -1;
+
+    for(i = 0; i < inlen; i += 1)
+        pos += sprintf(pos, "%02hhx", in[i]);
+
+    *outlen = pos - out + 1;
+    return 0;
+}
+
+int louis_string2hex(const char *in, unsigned char *out, int *outlen)
+{
+    int i = 0;
+    int j = 0;
+    int inlen = strlen(in);
+    unsigned char hex[2] = {0};
+
+    if(outlen == NULL || *outlen < inlen/2)
+        return -1;
+
+    for(*outlen = 0, i = 0; i < inlen; *outlen += 1, i += 2)
+    {
+        for(j = 0; j < 2; j += 1)
+        {
+            if(in[i+j] >= '0' && in[i+j] <= '9')        hex[j] = in[i+j] - '0';
+            else if(in[i+j] >= 'a' && in[i+j] <= 'f')   hex[j] = in[i+j] - 'a' + 10;
+            else if(in[i+j] >= 'A' && in[i+j] <= 'F')   hex[j] = in[i+j] - 'A' + 10;
+            else return -1;
+        }
+        out[*outlen] = hex[0] << 4 | hex[1];
+    }
+
+    return 0;
+}
+void louis_remove_chars(char *str, char garbage) {
+
+    char *src, *dst;
+    for (src = dst = str; *src != '\0'; src++) {
+        *dst = *src;
+        if (*dst != garbage) dst++;
+    }
+    *dst = '\0';
+}
+//xx:xx:xx:xx:xx:xx
+struct domain_feature *louis_new_domain_feature(char *mac_str){
+	unsigned char machex[MAC_ADDR_LEN] = {0};
+	int outbuff_len = MAC_ADDR_LEN;
+	struct domain_feature *vt = NULL;
+	char *newmac_str = kmalloc(strlen(mac_str) + 1, GFP_ATOMIC);
+	memset(newmac_str, 0, strlen(mac_str) + 1);
+	memcpy(newmac_str, mac_str, strlen(mac_str));
+	louis_remove_chars(newmac_str, ':');
+	louis_string2hex(newmac_str, machex, &outbuff_len);
+	vt = kmalloc(sizeof(struct domain_feature), GFP_ATOMIC);
+	memcpy(vt->mac, machex, MAC_ADDR_LEN);
+	vt->domain_size = 0;
+	if (newmac_str)
+		kfree(newmac_str);
+	return vt;
+}
+
+void louis_add_domain_to_feature(struct domain_feature *vt, char *domain){
+	char *domain1 = (char *)kmalloc(strlen(domain) + 1, GFP_ATOMIC);
+	strcpy(domain1, domain);
+	vt->domains[vt->domain_size] = domain1;
+	vt->domain_size += 1;
+}
+
+void louis_init_domain_feature(void){
+	struct domain_feature *vt_oppo = louis_new_domain_feature("e4:33:ae:e7:ac:73");
+	struct domain_feature *vt_pixel = louis_new_domain_feature("e2:44:5b:54:37:81");
+
+	louis_add_domain_to_feature(vt_oppo, "www.baidu.com");
+	list_add(&vt_oppo->hlist, &louis_domains_head);
+
+	louis_add_domain_to_feature(vt_pixel, "www.baidu.com");
+	list_add(&vt_pixel->hlist, &louis_domains_head);
+}
+
+
+void louis_clear_domains(void){
+	af_feature_node_t node;
+	struct domain_feature *node_vt, *n;
+
+	printk("louis_clear_domains\n");
+
+	louis_af_custom_write_lock();
+	if(!list_empty(&louis_domains_head)) {
+		list_for_each_entry_safe(node_vt, n, &louis_domains_head, hlist) {
+			list_del(&node_vt->hlist);
+			kfree(node_vt);
+		}
+	}
+	louis_af_custom_write_unlock();
+}
+
+
+
+void louis_load_domains(char *json_buf){
+	cJSON *json_object = NULL;
+	cJSON *blocklist_array = NULL;
+	cJSON *blocklist = NULL;
+
+	cJSON *mac = NULL;
+	cJSON *urlarray = NULL;
+	cJSON *url_object = NULL;
+	int array_size = 0;
+	size_t i = 0;
+	char *url_value = NULL;
+	struct domain_feature *df_node = NULL;
+
+	printk("louis_load_domains\n");
+	if (!json_buf){
+		printk("domains buf is empty!\n");
+		goto Exit;
+	}
+
+	json_object = cJSON_Parse(json_buf);
+	if (!json_object){
+		printk("json_object is NULL\n");
+		goto Exit;
+	}
+
+	
+
+	/*
+	{
+		"blocklist":[
+			{
+				"mac":"1",
+				"urls":[
+					"www.baidu.com",
+					"www.qq.com"
+				]
+			},
+			{
+				"mac":"2",
+				"urls":[
+					"www.baidu.com",
+					"www.qq.com"
+				]
+			}
+		]
+	}
+	*/
+
+	blocklist_array = cJSON_GetObjectItem(json_object, "blocklist");
+	if (!blocklist_array){
+		printk("blocklist_array is NULL\n");
+		goto Exit;
+	}
+	louis_clear_domains();
+	louis_af_custom_write_lock();
+	blocklist = blocklist_array->child;
+	while (blocklist != NULL){
+		mac = cJSON_GetObjectItem(blocklist, "mac");
+		if (0 != strcmp(mac->valuestring, "")){
+			urlarray = cJSON_GetObjectItem(blocklist, "urls");
+			array_size = cJSON_GetArraySize(urlarray);
+
+			df_node = louis_new_domain_feature(mac->valuestring);
+			
+			for (i = 0; i < array_size; i++){
+				url_object = cJSON_GetArrayItem(urlarray, i);
+				if (!url_object)
+					continue;
+				url_value = url_object->valuestring;
+				louis_add_domain_to_feature(df_node, url_value);
+				printk("adding url:%s to mac:%s\n", url_value, mac->valuestring);
+			}
+			list_add(&df_node->hlist, &louis_domains_head);
+		}
+		blocklist = blocklist->next;
+	}
+	louis_af_custom_write_unlock();
+
+Exit:
+	if (json_object){
+		kfree(json_object);
+		json_object = NULL;
+	}
+	return;
+}
+
+int louis_is_match_rule(char *reg_url_buf, char *mac){
+	af_feature_node_t node;
+	struct domain_feature *node_vt, *n;
+	int isMatch = 0;
+	size_t i = 0;
+
+	louis_af_custom_read_lock();
+	if (strlen(reg_url_buf) > 0){
+		//printk("mac:"MAC_FMT", url:%s\n", MAC_ARRAY(mac), reg_url_buf);
+		if(!list_empty(&louis_domains_head)) { 
+			list_for_each_entry_safe(node_vt, n, &louis_domains_head, hlist) {
+				if (0 == memcmp(node_vt->mac, mac, MAC_ADDR_LEN)){
+					
+					for (i = 0; i < node_vt->domain_size; i++)
+					{
+						if (strstr(reg_url_buf, node_vt->domains[i])){
+							printk("mac:"MAC_FMT", block url:%s\n", MAC_ARRAY(node_vt->mac), node_vt->domains[i]);
+							isMatch = 1;
+							louis_af_custom_read_unlock();
+							return isMatch;
+						}
+					}
+					
+				}
+			}
+		}
+	}
+	louis_af_custom_read_unlock();
+	return isMatch;
+}
+
+
+int louis_af_set_custom_settings(cJSON * data_obj)
+{
+	int i;
+	int id;
+	int type;
+	u8 mac_hex[MAC_ADDR_LEN] = {0};
+
+	printk("louis_af_set_custom_settings\n");
+
+
+	if (!data_obj) {
+		AF_ERROR("data obj is null\n");
+		return -1;
+	}
+	cJSON *customsettings = cJSON_GetObjectItem(data_obj, "customsettings");
+	if (!customsettings){
+		AF_ERROR("customsettings obj is null\n");
+		return -1;
+	}
+	louis_load_domains(customsettings->valuestring);
+	return 0;
+}
+
+
+////////////////////////////////////////////////////////
+
+
 /*
 add:
 {
@@ -318,6 +583,9 @@ int af_config_handle(char *config, unsigned int len)
 		break;
 	case AF_CMD_SET_MAC_LIST:
 		af_set_mac_list(data_obj);
+		break;
+	case AF_CMD_SET_CUSTOM_SETTINGS:
+		louis_af_set_custom_settings(data_obj);
 		break;
 	default:
 		AF_ERROR("invalid cmd %d\n", cmd_obj->valueint);
